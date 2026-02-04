@@ -1,0 +1,62 @@
+---
+- hosts: all_nodes  # 同步到所有节点（可改为rke2_cluster/rancher_node指定分组）
+  gather_facts: true
+  become: true
+  tasks:
+    # 第一步：从10.228.22.15拉取harbor.crt到Ansible控制节点临时目录
+    - name: 从10.228.22.15拉取harbor.crt证书
+      delegate_to: 10.228.22.15  # 任务在10.228.22.15执行
+      vars:
+        ansible_user: root
+        ansible_ssh_pass: 123.com
+        ansible_ssh_prot: 22
+      fetch:
+        src: /root/harbor/cert/harbor.crt  # 源证书路径
+        dest: /tmp/harbor.crt  # 控制节点临时存储路径
+        flat: true  # 不创建主机名目录，直接保存为harbor.crt
+        validate_checksum: true  # 校验文件完整性
+      run_once: true  # 只执行一次（避免重复拉取）
+      tags: fetch_cert
+
+    # 第二步：创建目标路径/etc/rancher/rke2/certs（不存在则创建）
+    - name: 创建RKE2证书目录/etc/rancher/rke2/certs
+      file:
+        path: /etc/rancher/rke2/certs
+        state: directory
+        mode: 0755
+        owner: root
+        group: root
+      tags: create_dir
+
+    # 第三步：将控制节点的harbor.crt推送到目标节点的指定路径
+    - name: 同步harbor.crt到目标节点
+      copy:
+        src: /tmp/harbor.crt  # 控制节点临时证书路径
+        dest: /etc/rancher/rke2/certs/harbor.crt  # 目标路径
+        mode: 0644  # 证书文件权限（只读）
+        owner: root
+        group: root
+        backup: true  # 覆盖前备份原有文件（如有）
+      tags: sync_cert
+
+    # 第四步：验证证书同步结果（可选，确保文件存在）
+    - name: 验证harbor.crt是否同步成功
+      stat:
+        path: /etc/rancher/rke2/certs/harbor.crt
+      register: cert_stat
+      tags: verify_cert
+
+    - name: 输出证书同步结果
+      debug:
+        msg: "✅ {{ inventory_hostname }}: harbor.crt同步成功，文件大小：{{ cert_stat.stat.size }} 字节"
+      when: cert_stat.stat.exists
+      tags: verify_cert
+
+    # 清理控制节点临时证书（可选）
+    - name: 清理控制节点临时harbor.crt
+      delegate_to: localhost
+      file:
+        path: /tmp/harbor.crt
+        state: absent
+      run_once: true
+      tags: clean_tmp
