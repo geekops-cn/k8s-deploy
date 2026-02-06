@@ -1,0 +1,13 @@
+token: "{{ rke2_token }}"
+write-kubeconfig-mode: "{{ write_kubeconfig_mode }}"
+
+system-default-registry: "{{ system_default_registry }}"
+
+tls-san:
+{% for san in rke2_tls_sans %}
+  - "{{ san }}"
+{% endfor %}
+
+{% if inventory_hostname != rke2_first_master %}
+server: "{{ rke2_server_url }}"
+{% endif %}

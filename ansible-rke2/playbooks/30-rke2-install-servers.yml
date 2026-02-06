@@ -1,0 +1,92 @@
+- name: "RKE2 | Install server (offline tar) and write configs"
+  hosts: rke2_servers
+  become: false
+  gather_facts: true
+
+  tasks:
+    - name: "Precheck | Ensure local artifacts exist (controller)"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ rke2_artifact_path_local }}/install.sh"
+        - "{{ rke2_artifact_path_local }}/rke2.linux-amd64.tar.gz"
+        - "{{ rke2_artifact_path_local }}/sha256sum-amd64.txt"
+      register: local_artifacts
+      delegate_to: localhost
+      run_once: true
+
+    - name: "Precheck | Fail if any artifact missing"
+      ansible.builtin.assert:
+        that:
+          - local_artifacts.results | map(attribute='stat.exists') | min
+        fail_msg: >
+          Missing install.sh / rke2.linux-amd64.tar.gz / sha256sum-amd64.txt
+          in {{ rke2_artifact_path_local }}
+      delegate_to: localhost
+      run_once: true
+
+    - name: "RKE2 | Ensure remote artifact dir exists"
+      ansible.builtin.file:
+        path: "{{ rke2_artifact_path_remote }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "RKE2 | Copy install.sh"
+      ansible.builtin.copy:
+        src: "{{ rke2_artifact_path_local }}/install.sh"
+        dest: "{{ rke2_artifact_path_remote }}/install.sh"
+        mode: "0755"
+
+    - name: "RKE2 | Copy rke2 tarball"
+      ansible.builtin.copy:
+        src: "{{ rke2_artifact_path_local }}/rke2.linux-amd64.tar.gz"
+        dest: "{{ rke2_artifact_path_remote }}/rke2.linux-amd64.tar.gz"
+        mode: "0644"
+
+    - name: "RKE2 | Copy sha256sum file"
+      ansible.builtin.copy:
+        src: "{{ rke2_artifact_path_local }}/sha256sum-amd64.txt"
+        dest: "{{ rke2_artifact_path_remote }}/sha256sum-amd64.txt"
+        mode: "0644"
+
+    - name: "RKE2 | Ensure config dir exists"
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "RKE2 | Render config.yaml"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/rke2/config.yaml.j2"
+        dest: /etc/rancher/rke2/config.yaml
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: "RKE2 | Render registries.yaml"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/rke2/registries.yaml.j2"
+        dest: /etc/rancher/rke2/registries.yaml
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: "RKE2 | Run install.sh (offline tar, server)"
+      ansible.builtin.command:
+        cmd: >
+          bash -lc
+          "INSTALL_RKE2_TYPE=server
+           INSTALL_RKE2_METHOD=tar
+           INSTALL_RKE2_VERSION={{ rke2_version }}
+           INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifact_path_remote }}
+           {{ rke2_artifact_path_remote }}/install.sh"
+      changed_when: false
+
+    - name: "RKE2 | Enable rke2-server service"
+      ansible.builtin.service:
+        name: rke2-server
+        enabled: true

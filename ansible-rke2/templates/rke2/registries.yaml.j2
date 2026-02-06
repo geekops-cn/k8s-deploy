@@ -1,0 +1,19 @@
+mirrors:
+  "docker.io":
+    endpoint:
+      - "https://{{ harbor_registry }}"
+  "registry.k8s.io":
+    endpoint:
+      - "https://{{ harbor_registry }}"
+  "ghcr.io":
+    endpoint:
+      - "https://{{ harbor_registry }}"
+  "quay.io":
+    endpoint:
+      - "https://{{ harbor_registry }}"
+
+configs:
+  "{{ harbor_registry }}":
+    auth:
+      username: "{{ harbor_username }}"
+      password: "{{ harbor_password }}"

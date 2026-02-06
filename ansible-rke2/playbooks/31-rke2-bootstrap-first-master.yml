@@ -1,0 +1,15 @@
+- name: "RKE2 | Bootstrap first master"
+  hosts: gk-rke2-m01.geekops.local
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: "RKE2 | Start rke2-server"
+      ansible.builtin.service:
+        name: rke2-server
+        state: started
+
+    - name: "RKE2 | Wait for kubeconfig"
+      ansible.builtin.wait_for:
+        path: /etc/rancher/rke2/rke2.yaml
+        timeout: 600

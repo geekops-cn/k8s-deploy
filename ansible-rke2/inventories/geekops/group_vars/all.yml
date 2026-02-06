@@ -1,0 +1,4 @@
+ansible_user: root
+ansible_password: "123.com"
+ansible_connection: ssh
+ansible_ssh_common_args: "-o StrictHostKeyChecking=no"

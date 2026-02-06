@@ -1,0 +1,217 @@
+- name: "OS Baseline | RKE2 Servers"
+  hosts: rke2_servers
+  become: false
+  gather_facts: true
+
+  tasks:
+    # ------------------------------
+    # Hostname & /etc/hosts
+    # 说明：RKE2/etcd/证书强依赖稳定 hostname；离线环境 DNS 往往不可靠
+    # ------------------------------
+    - name: "Hostname | Set system hostname"
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: "Hosts | Update /etc/hosts entries"
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        create: true
+        marker: "# {mark} ANSIBLE MANAGED RKE2 HOSTS"
+        block: |
+          {% for host in groups['all'] %}
+          {{ hostvars[host].ansible_host }} {{ host }} {{ host.split('.')[0] }}
+          {% endfor %}
+
+    # ------------------------------
+    # Time sync
+    # 说明：etcd/证书对时间漂移敏感。这里优先支持 chrony，其次 timesyncd
+    # ------------------------------
+    - name: "Time | Ensure time sync packages"
+      ansible.builtin.package:
+        name:
+          - chrony
+        state: present
+      when: time_sync_enable | bool
+      # 某些极简系统没 package 模块依赖；但一般企业 Linux 都可用
+
+    - name: "Time | Configure chrony NTP servers"
+      ansible.builtin.blockinfile:
+        path: /etc/chrony.conf
+        marker: "# {mark} ANSIBLE MANAGED NTP"
+        block: |
+          {% for s in ntp_servers %}
+          server {{ s }} iburst
+          {% endfor %}
+      when: time_sync_enable | bool
+
+    - name: "Time | Enable and restart chronyd"
+      ansible.builtin.service:
+        name: chronyd
+        state: restarted
+        enabled: true
+      when: time_sync_enable | bool
+
+    # ------------------------------
+    # SELinux
+    # 说明：RHEL/Rocky/Alma 常见；离线交付建议 permissive
+    # ------------------------------
+    - name: "SELinux | Persist SELINUX state in /etc/selinux/config"
+      ansible.builtin.lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: "SELINUX={{ selinux_state }}"
+        backrefs: false
+      when:
+        - ansible_facts.os_family == "RedHat"
+        - selinux_state is defined
+        - selinux_state | length > 0
+
+    - name: "SELinux | Set runtime permissive (if possible)"
+      # 说明：让 permissive 立刻生效；如果系统没有 getenforce/setenforce 会跳过
+      ansible.builtin.shell: |
+        if command -v getenforce >/dev/null 2>&1; then
+          cur="$(getenforce || true)"
+          if [ "{{ selinux_state }}" = "permissive" ] && [ "$cur" = "Enforcing" ]; then
+            setenforce 0 || true
+          fi
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when:
+        - ansible_facts.os_family == "RedHat"
+        - selinux_state == "permissive"
+
+    - name: "SELinux | Warn reboot required when disabled"
+      ansible.builtin.debug:
+        msg:
+          - "SELinux is set to 'disabled' in /etc/selinux/config."
+          - "A reboot is required for SELinux=disabled to take full effect."
+      when:
+        - ansible_facts.os_family == "RedHat"
+        - selinux_state == "disabled"
+
+    # ------------------------------
+    # Firewall (firewalld)
+    # 说明：两种策略：disable / open。请在 group_vars 控制
+    # ------------------------------
+    - name: "Firewall | Disable firewalld (mode=disable)"
+      ansible.builtin.service:
+        name: firewalld
+        state: stopped
+        enabled: false
+      when: firewall_mode == "disable"
+
+    - name: "Firewall | Ensure firewalld is running (mode=open)"
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: true
+      when: firewall_mode == "open"
+
+    - name: "Firewall | Open required ports (mode=open)"
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_open_ports }}"
+      when: firewall_mode == "open"
+
+    # ------------------------------
+    # Kernel modules
+    # 说明：containerd/kube-proxy 常用模块
+    # ------------------------------
+    - name: "Kernel | Configure required modules"
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/rke2.conf
+        content: |
+          {% for m in kernel_modules %}
+          {{ m }}
+          {% endfor %}
+        mode: "0644"
+
+    - name: "Kernel | Load required modules"
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ kernel_modules }}"
+
+    # ------------------------------
+    # Sysctl
+    # 说明：Kubernetes 网络转发核心参数
+    # ------------------------------
+    - name: "Sysctl | Configure Kubernetes sysctl"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-rke2-k8s.conf
+        content: |
+          {% for k, v in sysctl_params.items() %}
+          {{ k }} = {{ v }}
+          {% endfor %}
+        mode: "0644"
+
+    - name: "Sysctl | Apply sysctl settings"
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    # ------------------------------
+    # Swap
+    # 说明：Kubernetes 强制要求关闭 swap
+    # ------------------------------
+    - name: "Swap | Disable swap immediately"
+      ansible.builtin.command: swapoff -a
+      when: disable_swap | bool
+      changed_when: false
+
+    - name: "Swap | Disable swap in fstab"
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^(?!#)(.*\s+swap\s+.*)$'
+        replace: '# \1'
+      when: disable_swap | bool
+
+    # ------------------------------
+    # Verification (OS baseline checks)
+    # 说明：部署前验收输出，方便你截图/留档
+    # ------------------------------
+    - name: "Check | Show hostname"
+      ansible.builtin.command: hostname
+      register: check_hostname
+      changed_when: false
+
+    - name: "Check | Show SELinux status (if any)"
+      ansible.builtin.command:
+        cmd: |
+          bash -lc "getenforce 2>/dev/null || echo SELinux_not_installed"
+      register: check_selinux
+      changed_when: false
+
+    - name: "Check | Show time sync status (chrony)"
+      ansible.builtin.command: bash -lc "chronyc tracking 2>/dev/null | head -n 5 || true"
+      register: check_time
+      changed_when: false
+
+    - name: "Check | Show required modules"
+      ansible.builtin.command: bash -lc "lsmod | egrep 'overlay|br_netfilter' || true"
+      register: check_modules
+      changed_when: false
+
+    - name: "Check | Show sysctl values"
+      ansible.builtin.command: bash -lc "sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables"
+      register: check_sysctl
+      changed_when: false
+
+    - name: "Check | Show swap state"
+      ansible.builtin.command: bash -lc "swapon --show || true"
+      register: check_swap
+      changed_when: false
+
+    - name: "Report | Baseline check summary"
+      ansible.builtin.debug:
+        msg:
+          - "hostname: {{ check_hostname.stdout }}"
+          - "{{ check_selinux.stdout }}"
+          - "chrony:\n{{ check_time.stdout }}"
+          - "modules:\n{{ check_modules.stdout }}"
+          - "sysctl:\n{{ check_sysctl.stdout }}"
+          - "swap:\n{{ check_swap.stdout }}"

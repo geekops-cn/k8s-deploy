@@ -1,0 +1,95 @@
+# ==============================
+# RKE2 OS Baseline - Variables
+# ==============================
+
+# ---- Swap ----
+disable_swap: true
+
+# ---- Kernel modules (K8s/containerd 常用) ----
+kernel_modules:
+  - overlay
+  - br_netfilter
+
+# ---- Sysctl (Kubernetes 推荐) ----
+sysctl_params:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1
+
+# ---- Time sync (NTP) ----
+# 说明：etcd/证书依赖时间一致性。建议你填写企业内部 NTP；没有就先用公共池
+time_sync_enable: true
+ntp_servers:
+  - "ntp.aliyun.com"
+
+# ---- SELinux (RHEL/Rocky/Alma) ----
+# 取值：enforcing / permissive / disabled
+# 说明：离线/交付场景建议 permissive，后续稳定后再考虑 enforcing
+selinux_policy: "targeted"
+selinux_state: "permissive"
+
+# ---- Firewall strategy ----
+# firewall_mode:
+#   - "disable": 直接关闭 firewalld（简单）
+#   - "open": 保留 firewalld 并放行必要端口（更规范）
+firewall_mode: "disable"
+
+# RKE2 server 常用端口（按需扩展：如果你后续用特定 CNI/Ingress 再补）
+firewall_open_ports:
+  - "6443/tcp"     # Kubernetes API
+  - "9345/tcp"     # RKE2 supervisor
+  - "2379-2380/tcp" # etcd
+  - "10250/tcp"    # kubelet
+  - "30000-32767/tcp" # NodePort（如不用可删）
+
+# ==============================
+# Harbor CA trust (used by RKE2 nodes)
+# ==============================
+harbor_domain: "harbor.geekops.local"
+harbor_ca_src: "/root/ansible-rke2/files/harbor/harbor.crt"
+
+# Rocky/RHEL 系统信任链目录
+os_ca_anchor_path: "/etc/pki/ca-trust/source/anchors/harbor.crt"
+
+# RKE2 containerd 证书目录
+rke2_containerd_certs_dir: "/var/lib/rancher/rke2/agent/etc/containerd/certs.d"
+
+# ==============================
+# RKE2 version
+# ==============================
+rke2_version: "v1.34.3+rke2r1"
+
+# ==============================
+# Offline artifacts
+# ==============================
+rke2_artifact_path_local: "/root/ansible-rke2/files/rke2"
+rke2_artifact_path_remote: "/var/tmp/rke2-artifacts"
+
+# ==============================
+# Cluster topology
+# ==============================
+rke2_first_master: "gk-rke2-m01.geekops.local"
+rke2_server_url: "https://gk-rke2-m01.geekops.local:9345"
+
+# 必须替换为你自己的长随机字符串
+rke2_token: "123456"
+
+write_kubeconfig_mode: "0644"
+
+# ==============================
+# Harbor (HTTPS)
+# ==============================
+harbor_registry: "harbor.geekops.local"
+harbor_username: "admin"
+harbor_password: "admin123"
+
+# 默认镜像前缀
+system_default_registry: "harbor.geekops.local"
+
+# ==============================
+# TLS SANs
+# ==============================
+rke2_tls_sans:
+  - "gk-rke2-m01.geekops.local"
+  - "gk-rke2-m02.geekops.local"
+  - "gk-rke2-m03.geekops.local"

@@ -1,0 +1,65 @@
+- name: "Harbor CA | Trust CA on RKE2 servers"
+  hosts: rke2_servers
+  become: false
+  gather_facts: true
+
+  tasks:
+    # ------------------------------
+    # OS trust store
+    # 说明：让系统信任 harbor 自签 CA（curl/系统组件/部分工具会用到）
+    # Rocky/RHEL：update-ca-trust
+    # ------------------------------
+    - name: "CA | Copy harbor CA to OS trust anchors"
+      ansible.builtin.copy:
+        src: "{{ harbor_ca_src }}"
+        dest: "{{ os_ca_anchor_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: "CA | Update OS trust store (RHEL family)"
+      ansible.builtin.command:
+        cmd: update-ca-trust extract
+      changed_when: false
+      when: ansible_facts.os_family == "RedHat"
+
+    # ------------------------------
+    # RKE2 containerd trust (critical)
+    # 说明：RKE2 的 containerd 默认不一定读系统 trust store，
+    #       推荐写入 certs.d/<registry>/ca.crt（最稳）
+    # ------------------------------
+    - name: "Containerd | Ensure certs.d registry dir exists"
+      ansible.builtin.file:
+        path: "{{ rke2_containerd_certs_dir }}/{{ harbor_domain }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Containerd | Install harbor CA for containerd"
+      ansible.builtin.copy:
+        src: "{{ harbor_ca_src }}"
+        dest: "{{ rke2_containerd_certs_dir }}/{{ harbor_domain }}/ca.crt"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # ------------------------------
+    # Verify
+    # 说明：只做本地文件验证，不依赖外网
+    # ------------------------------
+    - name: "Check | Verify CA file exists in OS anchors"
+      ansible.builtin.stat:
+        path: "{{ os_ca_anchor_path }}"
+      register: os_ca_stat
+
+    - name: "Check | Verify CA file exists in containerd certs.d"
+      ansible.builtin.stat:
+        path: "{{ rke2_containerd_certs_dir }}/{{ harbor_domain }}/ca.crt"
+      register: ct_ca_stat
+
+    - name: "Report | Harbor CA trust summary"
+      ansible.builtin.debug:
+        msg:
+          - "OS anchor: {{ os_ca_anchor_path }} exists={{ os_ca_stat.stat.exists }}"
+          - "containerd ca: {{ rke2_containerd_certs_dir }}/{{ harbor_domain }}/ca.crt exists={{ ct_ca_stat.stat.exists }}"

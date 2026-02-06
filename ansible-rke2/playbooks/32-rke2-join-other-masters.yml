@@ -1,0 +1,12 @@
+- name: "RKE2 | Join other masters"
+  hosts:
+    - gk-rke2-m02.geekops.local
+    - gk-rke2-m03.geekops.local
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: "RKE2 | Start rke2-server"
+      ansible.builtin.service:
+        name: rke2-server
+        state: started
